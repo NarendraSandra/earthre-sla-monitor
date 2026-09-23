@@ -96,6 +96,8 @@ npm run lint
 npm run build
 ```
 
+`npm test` includes both cleaning unit tests and a Postgres-engine integration suite (PGlite) that executes the checked-in schema, performs an atomic-style batch/check insert, verifies SLA aggregation and UTC date filtering, and confirms the database uniqueness constraint.
+
 To reproduce the data-quality table against a directory of CSV files:
 
 ```bash
