@@ -9,5 +9,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // PGlite boots a real Postgres WASM engine; cold Windows runners can take
+    // several seconds before the first query is ready.
+    testTimeout: 15_000,
+    hookTimeout: 15_000,
   },
 });

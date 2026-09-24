@@ -25,6 +25,7 @@ Single-screen dashboard (collapsible stats + filterable logs)
 ```
 
 - **Next.js 16 App Router on Vercel** keeps the UI and API in one small deployable project. Each route handler under `app/api` becomes an actual Vercel Function in production.
+- **TypeScript, Tailwind CSS, and shadcn/ui** provide the frontend system; the availability and latency views use shadcn's chart composition over Recharts 3.
 - **Neon Postgres** is durable, relational, serverless-friendly, and available through Vercel's Marketplace free plan. A dataset and all its cleaned checks are written in one transaction.
 - **No ORM** is used. The query surface is small, parameterized SQL makes the aggregation decisions visible, and the Neon HTTP driver avoids holding traditional connections open in serverless executions.
 - The database schema is created idempotently on first use. The equivalent DDL is also checked in at `db/schema.sql` for review.
@@ -36,6 +37,7 @@ Single-screen dashboard (collapsible stats + filterable logs)
 - P95 response latency, excluding absent readings rather than coercing them to zero
 - Data coverage against the stated 15-minute cadence, kept separate from availability
 - A daily failure pulse for locating incident windows
+- Daily availability plotted against the 99.9% threshold, plus per-service P95 latency
 - A visible cleaning receipt: timestamps normalized, seconds converted, duplicates consolidated, missing values, sentinels, and rejected rows
 - The cleaned underlying checks, with single-day or inclusive date-range filters, service/state filters, quality flags, and pagination
 
