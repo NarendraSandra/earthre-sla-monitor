@@ -2,8 +2,8 @@
 
 import {
   Activity, AlertTriangle, ArrowUpRight, CalendarDays, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CloudUpload, Database, FileCheck2, Gauge,
-  LoaderCircle, RefreshCw, ServerCog, ShieldCheck, Timer, X,
+  ChevronLeft, ChevronRight, ChevronsUpDown, CloudUpload, Database, Eye,
+  FileCheck2, Gauge, LoaderCircle, RefreshCw, ServerCog, ShieldCheck, Timer, X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -15,12 +15,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { DashboardPayload, LogsPayload } from "@/lib/types";
+import type { DashboardPayload, LogRecord, LogsPayload } from "@/lib/types";
 
 type ApiEnvelope<T> = { data: T; error?: string };
 type Filters = { from: string; to: string; service: string; state: string };
@@ -33,6 +36,24 @@ const availabilityChart = {
 const latencyChart = {
   p95LatencyMs: { label: "P95 latency (ms)", color: "var(--chart-3)" },
 } satisfies ChartConfig;
+
+const QUALITY_EXPLANATIONS: Record<string, { title: string; detail: string; impact: string }> = {
+  duplicate_consolidated: {
+    title: "Duplicate interval consolidated",
+    detail: "More than one agent reported this service at the same normalized 15-minute timestamp.",
+    impact: "It counts once. The failed observation wins; otherwise the slower reading wins, so deduplication cannot improve the SLA.",
+  },
+  missing_latency: {
+    title: "Latency was missing",
+    detail: "The source row had no latency value, but its timestamp, service identity, status, agent and region were usable.",
+    impact: "The check remains in availability calculations and is excluded from latency percentiles.",
+  },
+  non_standard_status: {
+    title: "Non-standard status retained",
+    detail: "The status is an agent sentinel rather than a valid HTTP status in the 100–599 range.",
+    impact: "It is preserved for auditability and classified unavailable instead of being silently dropped.",
+  },
+};
 
 const percent = (value: number) => `${value.toFixed(value >= 99 ? 3 : 2)}%`;
 const latency = (value: number | null) => value === null ? "N/A" : value >= 1_000 ? `${(value / 1_000).toFixed(2)} s` : `${Math.round(value)} ms`;
@@ -75,6 +96,8 @@ export function SlaDashboard() {
   const [draftFilters, setDraftFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [statsOpen, setStatsOpen] = useState(true);
+  const [datasetOpen, setDatasetOpen] = useState(false);
+  const [selectedCheck, setSelectedCheck] = useState<LogRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [logsLoading, setLogsLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -138,6 +161,7 @@ export function SlaDashboard() {
 
   const quality = dashboard?.activeUpload.quality;
   const services = dashboard?.services ?? [];
+  const currentUpload = dashboard?.uploads.find((upload) => upload.id === activeUploadId) ?? dashboard?.activeUpload;
   const chartFloor = Math.max(0, Math.min(...(dashboard?.daily.map((day) => day.availability) ?? [99.5])) - 0.08);
 
   return (
@@ -190,7 +214,7 @@ export function SlaDashboard() {
 
         {dashboard && <div className="mt-10 space-y-5">
           <Card className="rounded-lg py-0"><CardContent className="flex flex-col gap-5 px-5 py-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-2"><label className="text-muted-foreground block text-[10px] font-bold tracking-[0.14em] uppercase">Active dataset</label><Select value={activeUploadId} onValueChange={(value) => { if (!value) return; setPage(1); setIsLoading(true); setLogsLoading(true); setActiveUploadId(String(value)); void loadDashboard(String(value)); }}><SelectTrigger className="h-9 w-full min-w-72 bg-background"><SelectValue /></SelectTrigger><SelectContent>{dashboard.uploads.map((upload) => <SelectItem key={upload.id} value={upload.id}>{upload.fileName} · {shortDate(upload.uploadedAt)}</SelectItem>)}</SelectContent></Select></div>
+            <div className="w-full space-y-2 lg:max-w-xl"><label className="text-muted-foreground block text-[10px] font-bold tracking-[0.14em] uppercase">Active dataset</label><Popover open={datasetOpen} onOpenChange={setDatasetOpen}><PopoverTrigger render={<Button variant="outline" role="combobox" aria-expanded={datasetOpen} className="h-auto w-full justify-between bg-background px-3 py-2.5 text-left" />}><span className="min-w-0"><span className="block truncate text-xs font-semibold">{currentUpload?.fileName}</span><span className="text-muted-foreground mt-0.5 block text-[10px] font-normal">Uploaded {shortDate(currentUpload?.uploadedAt ?? null)} · {currentUpload?.acceptedRows.toLocaleString()} clean checks</span></span><ChevronsUpDown className="text-muted-foreground ml-3 size-4 shrink-0" /></PopoverTrigger><PopoverContent align="start" className="w-[min(440px,calc(100vw-2rem))] p-0"><Command><CommandInput placeholder="Find a dataset…" /><CommandList><CommandEmpty>No dataset found.</CommandEmpty><CommandGroup heading={`${dashboard.uploads.length} uploaded dataset${dashboard.uploads.length === 1 ? "" : "s"}`}>{dashboard.uploads.map((upload) => <CommandItem key={upload.id} value={`${upload.fileName} ${upload.uploadedAt}`} data-checked={upload.id === activeUploadId} className="items-start py-2.5" onSelect={() => { setDatasetOpen(false); if (upload.id === activeUploadId) return; setPage(1); setIsLoading(true); setLogsLoading(true); setActiveUploadId(upload.id); void loadDashboard(upload.id); }}><Database className="mt-0.5 size-4 text-primary" /><span className="min-w-0 pr-4"><span className="block truncate text-xs font-semibold">{upload.fileName}</span><span className="text-muted-foreground mt-1 block text-[10px]">{shortDate(upload.rangeStart)} — {shortDate(upload.rangeEnd)} · {upload.acceptedRows.toLocaleString()} checks</span></span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></div>
             <div className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-2 text-xs"><span className="flex items-center gap-2"><CalendarDays className="size-3.5" />{shortDate(dashboard.activeUpload.rangeStart)} — {shortDate(dashboard.activeUpload.rangeEnd)}</span><span className="flex items-center gap-2"><ShieldCheck className="size-3.5" />{dashboard.activeUpload.acceptedRows.toLocaleString()} cleaned checks</span></div>
           </CardContent></Card>
 
@@ -265,7 +289,7 @@ export function SlaDashboard() {
             <div className="relative overflow-x-auto">
               {logsLoading && <div className="bg-card/75 absolute inset-0 z-10 grid place-items-center backdrop-blur-[1px]"><LoaderCircle className="text-primary size-5 animate-spin" /></div>}
               <Table className="min-w-[980px]"><TableHeader><TableRow className="bg-muted/20"><TableHead>Timestamp (UTC)</TableHead><TableHead>Service</TableHead><TableHead>State</TableHead><TableHead>Status</TableHead><TableHead>Latency</TableHead><TableHead>Reporter</TableHead><TableHead className="text-right">Quality</TableHead></TableRow></TableHeader><TableBody>
-                {logs?.rows.map((row) => <TableRow key={row.id}><TableCell className="font-mono text-[11px] tabular-nums">{timestamp(row.checkedAt)}</TableCell><TableCell><span className="block text-xs font-semibold">{row.serviceName}</span><span className="text-muted-foreground font-mono text-[10px]">{row.serviceId}</span></TableCell><TableCell><Badge variant="outline" className={row.isAvailable ? "border-emerald-700/20 bg-emerald-50 text-emerald-800" : "border-rose-700/20 bg-rose-50 text-rose-800"}><span className={`size-1.5 rounded-full ${row.isAvailable ? "bg-emerald-600" : "bg-rose-600"}`} />{row.isAvailable ? "Available" : "Down"}</Badge></TableCell><TableCell className="font-mono text-xs">HTTP {row.statusCode}</TableCell><TableCell className="font-mono text-xs">{row.latencyMs === null ? <span className="text-muted-foreground">N/A</span> : latency(row.latencyMs)}</TableCell><TableCell><span className="block text-xs font-medium">{row.agent}</span><span className="text-muted-foreground text-[10px]">{row.region}</span></TableCell><TableCell className="text-right">{row.warnings.length ? <Badge variant="outline" className="border-amber-700/20 bg-amber-50 text-amber-800"><AlertTriangle />{row.warnings.length} flag{row.warnings.length === 1 ? "" : "s"}</Badge> : <span className="text-muted-foreground inline-flex items-center gap-1 text-[10px]"><Check className="size-3" />Clean</span>}</TableCell></TableRow>)}
+                {logs?.rows.map((row) => <TableRow key={row.id} className="group"><TableCell className="font-mono text-[11px] tabular-nums">{timestamp(row.checkedAt)}</TableCell><TableCell><span className="block text-xs font-semibold">{row.serviceName}</span><span className="text-muted-foreground font-mono text-[10px]">{row.serviceId}</span></TableCell><TableCell><Badge variant="outline" className={row.isAvailable ? "border-emerald-700/20 bg-emerald-50 text-emerald-800" : "border-rose-700/20 bg-rose-50 text-rose-800"}><span className={`size-1.5 rounded-full ${row.isAvailable ? "bg-emerald-600" : "bg-rose-600"}`} />{row.isAvailable ? "Available" : "Down"}</Badge></TableCell><TableCell className="font-mono text-xs">HTTP {row.statusCode}</TableCell><TableCell className="font-mono text-xs">{row.latencyMs === null ? <span className="text-muted-foreground">N/A</span> : latency(row.latencyMs)}</TableCell><TableCell><span className="block text-xs font-medium">{row.agent}</span><span className="text-muted-foreground text-[10px]">{row.region}</span></TableCell><TableCell className="text-right"><Button variant="ghost" size="sm" className={row.warnings.length ? "border border-amber-700/20 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900" : "text-muted-foreground hover:text-foreground"} onClick={() => setSelectedCheck(row)} aria-label={`View quality details for ${row.serviceName} at ${timestamp(row.checkedAt)}`}>{row.warnings.length ? <><AlertTriangle />{row.warnings.length} flag{row.warnings.length === 1 ? "" : "s"}</> : <><Check />Clean</>}<Eye className="ml-0.5 opacity-0 transition-opacity group-hover:opacity-100" /></Button></TableCell></TableRow>)}
                 {logs && !logs.rows.length && <TableRow><TableCell colSpan={7} className="text-muted-foreground h-32 text-center">No checks match these filters.</TableCell></TableRow>}
               </TableBody></Table>
             </div>
@@ -273,6 +297,49 @@ export function SlaDashboard() {
           </Card>
         </div>}
       </div>
+
+      <Dialog open={selectedCheck !== null} onOpenChange={(open) => { if (!open) setSelectedCheck(null); }}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
+          {selectedCheck && <>
+            <DialogHeader className="pr-8">
+              <div className="mb-1 flex items-center gap-2">
+                <Badge variant="outline" className={selectedCheck.warnings.length ? "border-amber-700/20 bg-amber-50 text-amber-800" : "border-emerald-700/20 bg-emerald-50 text-emerald-800"}>{selectedCheck.warnings.length ? <><AlertTriangle />Quality issue</> : <><Check />Quality clean</>}</Badge>
+                <Badge variant="outline" className={selectedCheck.isAvailable ? "text-emerald-800" : "text-rose-800"}>{selectedCheck.isAvailable ? "Service available" : "Service unavailable"}</Badge>
+              </div>
+              <DialogTitle>Why this record is {selectedCheck.warnings.length ? "flagged" : "clean"}</DialogTitle>
+              <DialogDescription>Data-quality status is separate from service health. A valid HTTP 500 record can be clean data while still representing downtime.</DialogDescription>
+            </DialogHeader>
+
+            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
+              {[
+                ["Service", selectedCheck.serviceName],
+                ["Timestamp", timestamp(selectedCheck.checkedAt)],
+                ["HTTP status", String(selectedCheck.statusCode)],
+                ["Latency", latency(selectedCheck.latencyMs)],
+                ["Agent", selectedCheck.agent],
+                ["Region", selectedCheck.region],
+              ].map(([label, value]) => <div key={label} className="bg-card p-3"><p className="text-muted-foreground text-[9px] font-semibold tracking-wider uppercase">{label}</p><p className="mt-1 break-words font-mono text-[11px] font-medium">{value}</p></div>)}
+            </div>
+
+            {selectedCheck.warnings.length ? <div className="space-y-3">
+              <p className="text-[10px] font-bold tracking-[0.14em] uppercase">Detected quality conditions</p>
+              {selectedCheck.warnings.map((warning) => {
+                const explanation = QUALITY_EXPLANATIONS[warning] ?? { title: warning.replaceAll("_", " "), detail: "The processing pipeline attached this quality marker to the cleaned record.", impact: "The marker remains stored with the check for auditability." };
+                return <div key={warning} className="rounded-md border border-amber-700/20 bg-amber-50/70 p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-700" /><div><p className="text-xs font-semibold text-amber-950">{explanation.title}</p><p className="mt-1 text-xs leading-5 text-amber-950/70">{explanation.detail}</p><p className="mt-2 text-[10px] font-medium leading-4 text-amber-900"><span className="font-bold uppercase">SLA handling:</span> {explanation.impact}</p></div></div></div>;
+              })}
+            </div> : <div className="rounded-md border border-emerald-700/20 bg-emerald-50/70 p-4">
+              <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-700" /><div><p className="text-xs font-semibold text-emerald-950">All ingestion checks passed</p><p className="mt-1 text-xs leading-5 text-emerald-950/70">The record has valid service and reporter identity, an explicit UTC timestamp, a supported latency unit with a non-negative value, and no duplicate service interval.</p></div></div>
+              <Separator className="my-3 bg-emerald-800/10" />
+              <ul className="grid gap-2 text-[11px] text-emerald-950/75 sm:grid-cols-2">
+                {["Identity fields present", "Timestamp valid in UTC", "Status parsed successfully", "Latency normalized to ms", "Reporter and region present", "Unique service interval"].map((item) => <li key={item} className="flex items-center gap-2"><Check className="size-3 text-emerald-700" />{item}</li>)}
+              </ul>
+            </div>}
+
+            <div className="bg-muted/45 rounded-md p-3 text-[11px] leading-5"><span className="font-semibold">Availability result:</span> This check is counted as <span className={selectedCheck.isAvailable ? "font-semibold text-emerald-800" : "font-semibold text-rose-800"}>{selectedCheck.isAvailable ? "available" : "unavailable"}</span> because HTTP {selectedCheck.statusCode} {selectedCheck.isAvailable ? "is within the accepted 2xx–3xx range" : "falls outside the accepted 2xx–3xx range"}.</div>
+            <DialogFooter showCloseButton />
+          </>}
+        </DialogContent>
+      </Dialog>
 
       <footer className="border-t bg-card/65"><div className="text-muted-foreground mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-6 text-[9px] font-semibold tracking-[0.12em] uppercase sm:flex-row sm:items-center sm:justify-between sm:px-8"><span>EarthRe reliability record</span><span className="flex items-center gap-1.5">Observed checks · cleaned data · UTC <ArrowUpRight className="size-3" /></span></div></footer>
     </main>

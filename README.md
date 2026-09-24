@@ -40,6 +40,8 @@ Single-screen dashboard (collapsible stats + filterable logs)
 - Daily availability plotted against the 99.9% threshold, plus per-service P95 latency
 - A visible cleaning receipt: timestamps normalized, seconds converted, duplicates consolidated, missing values, sentinels, and rejected rows
 - The cleaned underlying checks, with single-day or inclusive date-range filters, service/state filters, quality flags, and pagination
+- Clickable quality details for every check: flagged rows explain each cleaning condition and SLA impact; clean rows show the validations they passed
+- A searchable dataset picker with upload date, observed range, and cleaned-row count
 
 ## Data findings and handling
 
